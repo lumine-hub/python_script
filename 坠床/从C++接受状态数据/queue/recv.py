@@ -19,9 +19,8 @@ def recv_exact(sock, size):
     return data
 
 def start_target_state_server(host='127.0.0.1', port=8899):
-    HEADER_SIZE = 4  # 2字节帧头 + 2字节总长度
-    # 数据结构：tid (2字节), state (2字节), numPoints (4字节), posX, posY, posZ, velX, velY, velZ, accX, accY, accZ (每个4字节，共9个4字节)
-    TARGET_STRUCT_FMT = '<HHIfffffffff'
+    HEADER_SIZE = 8  # 2字节帧头 + 4字节frame_index + 2字节payload长度
+    TARGET_STRUCT_FMT = '<HHIfffffffff'  # tid, state, numPoints, posX~accZ
     TARGET_STRUCT_SIZE = struct.calcsize(TARGET_STRUCT_FMT)
 
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -39,7 +38,8 @@ def start_target_state_server(host='127.0.0.1', port=8899):
                 print("[Server] Connection closed.")
                 break
 
-            frame_header, total_len = struct.unpack('<HH', header_data)
+            # 修正：包含frame_index的解析
+            frame_header, frame_index, total_len = struct.unpack('<H I H', header_data)
             if frame_header != 0xAA55:
                 print(f"[Server] Invalid frame header: {hex(frame_header)}")
                 continue
@@ -49,10 +49,10 @@ def start_target_state_server(host='127.0.0.1', port=8899):
                 print("[Server] Body receive failed.")
                 break
 
-            # 假设 body 的第一个字节表示 target 数量
             target_num = body[0]
             targets = []
             offset = 1
+
             for i in range(target_num):
                 target_data = body[offset : offset + TARGET_STRUCT_SIZE]
                 if len(target_data) != TARGET_STRUCT_SIZE:
@@ -74,12 +74,11 @@ def start_target_state_server(host='127.0.0.1', port=8899):
                     'accY': fields[10],
                     'accZ': fields[11],
                 }
-                print(target_info)
                 targets.append(target_info)
                 offset += TARGET_STRUCT_SIZE
 
-            # 将解析后的 target 数据放入队列中
-            data_queue.put(targets)
+            print(f"[Server] Frame #{frame_index}, targetNum={target_num}, targets={targets}")
+            data_queue.put((frame_index, targets))  # 加上frame_index放入队列
     except Exception as e:
         print(f"[Server] Exception: {e}")
     finally:
@@ -97,7 +96,8 @@ class TargetDisplayWidget(QtWidgets.QWidget):
         self.targets = []
         self.scale = 100  # 1米 = 100像素，可调
         self.x_range = (-5, 5)  # x轴显示范围：-5m ~ 5m
-        self.y_range = (0, 3)   # y轴显示范围：0 ~ 3m
+        self.y_range = (0, 7)   # y轴显示范围：0 ~ 7m
+        self.__actionIndex = ['empty', '正常', '行走', '坐', '跌倒', '跌倒', '出边界']
 
     def update_targets(self, targets):
         self.targets = targets
@@ -108,44 +108,41 @@ class TargetDisplayWidget(QtWidgets.QWidget):
         painter.fillRect(self.rect(), QtCore.Qt.white)
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
 
+        # 绘制帧序号
+        painter.setPen(QtCore.Qt.black)
+        painter.setFont(QtGui.QFont("Arial", 12, QtGui.QFont.Bold))
+        painter.drawText(10, 25, f"Frame #{self.parent().frame_index}")
+
         width = self.width()
         height = self.height()
 
-        # 坐标映射偏移量（坐标原点在下方中间）
         origin_x = width / 2
-        origin_y = height - 50  # 留50像素底部空白
+        origin_y = height - 50  # 原点在底部中间
 
-        # 设置字体
         font = painter.font()
         font.setPointSize(10)
         painter.setFont(font)
 
-        # === 坐标轴 ===
+        # 坐标轴
         axis_pen = QtGui.QPen(QtCore.Qt.gray, 1, QtCore.Qt.DashLine)
         painter.setPen(axis_pen)
 
-        # X轴
-        painter.drawLine(0, int(origin_y), width, int(origin_y))
+        painter.drawLine(0, int(origin_y), width, int(origin_y))  # X轴
+        painter.drawLine(int(origin_x), int(origin_y), int(origin_x), int(origin_y - self.y_range[1] * self.scale))  # Y轴
 
-        # Y轴
-        painter.drawLine(int(origin_x), int(origin_y), int(origin_x), int(origin_y - self.y_range[1] * self.scale))
-
-        # === 坐标刻度 ===
         painter.setPen(QtCore.Qt.darkGray)
-        # X方向刻度（-5m~5m）
         for m in range(self.x_range[0], self.x_range[1] + 1):
             x_pos = origin_x + m * self.scale
             painter.drawLine(int(x_pos), int(origin_y - 5), int(x_pos), int(origin_y + 5))
             painter.drawText(int(x_pos) - 10, int(origin_y + 20), f"{m}m")
 
-        # Y方向刻度（0~3m）
         for m in range(int(self.y_range[0]), int(self.y_range[1]) + 1):
             y_pos = origin_y - m * self.scale
             painter.drawLine(int(origin_x - 5), int(y_pos), int(origin_x + 5), int(y_pos))
             if m != 0:
                 painter.drawText(int(origin_x + 8), int(y_pos + 5), f"{m}m")
 
-        # === 目标点绘制 ===
+        # 绘制目标
         if self.targets:
             for target in self.targets:
                 x = target['posX']
@@ -153,20 +150,26 @@ class TargetDisplayWidget(QtWidgets.QWidget):
                 draw_x = origin_x + x * self.scale
                 draw_y = origin_y - y * self.scale
 
-                # 点大小
                 radius = 8
                 painter.setBrush(QtCore.Qt.red)
                 painter.setPen(QtCore.Qt.NoPen)
                 painter.drawEllipse(QtCore.QPointF(draw_x, draw_y), radius, radius)
 
-                # 坐标文字
+                # 文本信息
                 painter.setPen(QtCore.Qt.black)
-                text = f"x:{x:.2f}, y:{y:.2f}, z:{target['posZ']:.2f}"
-                painter.drawText(int(draw_x + 10), int(draw_y), text)
+                text1 = f"x:{x:.2f}, y:{y:.2f}, z:{target['posZ']:.2f}"
+
+                # 状态映射
+                state_index = target.get('state', 0)
+                state_text = self.__actionIndex[state_index] if 0 <= state_index < len(self.__actionIndex) else "未知"
+                text2 = f"状态: {state_text}"
+
+                painter.drawText(int(draw_x + 10), int(draw_y), text1)
+                painter.drawText(int(draw_x + 10), int(draw_y + 15), text2)
         else:
-            # 如果无目标，显示提示
             painter.setPen(QtCore.Qt.darkGray)
             painter.drawText(width / 2 - 50, height / 2, "暂无目标")
+
 
 
 
@@ -176,8 +179,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle("Target Display")
         self.display_widget = TargetDisplayWidget(self)
         self.setCentralWidget(self.display_widget)
+        self.frame_index = 0  # 新增：保存当前帧序号
 
-        # 使用定时器轮询数据队列，间隔 100ms 检查一次
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self.poll_queue)
         self.timer.start(100)
@@ -186,7 +189,9 @@ class MainWindow(QtWidgets.QMainWindow):
         """定时器回调，检查队列中是否有新数据"""
         while not data_queue.empty():
             try:
-                targets = data_queue.get_nowait()
+                frame_index, targets = data_queue.get_nowait()
+                self.frame_index = frame_index  # 保存帧序号
+                self.setWindowTitle(f"Target Display - Frame #{self.frame_index}")  # 更新标题
                 self.display_widget.update_targets(targets)
             except queue.Empty:
                 break
