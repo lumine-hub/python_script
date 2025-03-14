@@ -111,4 +111,4 @@ def main(serial_port, tcp_ip, tcp_port, max_retries=5, retry_delay=5):
 
 
 if __name__ == "__main__":
-    main('COM30', '127.0.0.1', 8888, max_retries=3, retry_delay=2)
+    main('COM30', '127.0.0.1', 7777, max_retries=3, retry_delay=2)

@@ -18,73 +18,83 @@ def recv_exact(sock, size):
         data += packet
     return data
 
-def start_target_state_server(host='127.0.0.1', port=8899):
-    HEADER_SIZE = 8  # 2字节帧头 + 4字节frame_index + 2字节payload长度
-    TARGET_STRUCT_FMT = '<HHIfffffffff'  # tid, state, numPoints, posX~accZ
+def start_target_state_server(host='127.0.0.1', port=7788):
+    HEADER_SIZE = 8
+    TARGET_STRUCT_FMT = '<HHIffffffffff'
     TARGET_STRUCT_SIZE = struct.calcsize(TARGET_STRUCT_FMT)
 
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_sock.bind((host, port))
     server_sock.listen(3)
     print(f"[Server] Listening on {host}:{port}...")
 
-    conn, addr = server_sock.accept()
-    print(f"[Server] Connected from {addr}")
-
     try:
         while True:
-            header_data = recv_exact(conn, HEADER_SIZE)
-            if not header_data:
-                print("[Server] Connection closed.")
-                break
+            print("[Server] Waiting for client connection...")
+            conn, addr = server_sock.accept()
+            print(f"[Server] Connected from {addr}")
 
-            # 修正：包含frame_index的解析
-            frame_header, frame_index, total_len = struct.unpack('<H I H', header_data)
-            if frame_header != 0xAA55:
-                print(f"[Server] Invalid frame header: {hex(frame_header)}")
-                continue
+            try:
+                while True:
+                    header_data = recv_exact(conn, HEADER_SIZE)
+                    if not header_data:
+                        print("[Server] Client disconnected.")
+                        break
 
-            body = recv_exact(conn, total_len)
-            if not body:
-                print("[Server] Body receive failed.")
-                break
+                    frame_header, frame_index, total_len = struct.unpack('<H I H', header_data)
+                    if frame_header != 0xAA55:
+                        print(f"[Server] Invalid frame header: {hex(frame_header)}")
+                        continue
 
-            target_num = body[0]
-            targets = []
-            offset = 1
+                    body = recv_exact(conn, total_len)
+                    if not body:
+                        print("[Server] Body receive failed.")
+                        break
 
-            for i in range(target_num):
-                target_data = body[offset : offset + TARGET_STRUCT_SIZE]
-                if len(target_data) != TARGET_STRUCT_SIZE:
-                    print("[Server] Target data size mismatch.")
-                    break
+                    target_num = body[0]
+                    targets = []
+                    offset = 1
 
-                fields = struct.unpack(TARGET_STRUCT_FMT, target_data)
-                target_info = {
-                    'tid': fields[0],
-                    'state': fields[1],
-                    'numPoints': fields[2],
-                    'posX': fields[3],
-                    'posY': fields[4],
-                    'posZ': fields[5],
-                    'velX': fields[6],
-                    'velY': fields[7],
-                    'velZ': fields[8],
-                    'accX': fields[9],
-                    'accY': fields[10],
-                    'accZ': fields[11],
-                }
-                targets.append(target_info)
-                offset += TARGET_STRUCT_SIZE
+                    for i in range(target_num):
+                        target_data = body[offset : offset + TARGET_STRUCT_SIZE]
+                        if len(target_data) != TARGET_STRUCT_SIZE:
+                            print("[Server] Target data size mismatch.")
+                            break
 
-            print(f"[Server] Frame #{frame_index}, targetNum={target_num}, targets={targets}")
-            data_queue.put((frame_index, targets))  # 加上frame_index放入队列
+                        fields = struct.unpack(TARGET_STRUCT_FMT, target_data)
+                        target_info = {
+                            'tid': fields[0],
+                            'state': fields[1],
+                            'numPoints': fields[2],
+                            'posX': fields[3],
+                            'posY': fields[4],
+                            'posZ': fields[5],
+                            'velX': fields[6],
+                            'velY': fields[7],
+                            'velZ': fields[8],
+                            'accX': fields[9],
+                            'accY': fields[10],
+                            'accZ': fields[11],
+                        }
+                        targets.append(target_info)
+                        offset += TARGET_STRUCT_SIZE
+
+                    print(f"[Server] Frame #{frame_index}, targetNum={target_num}, targets={targets}")
+                    data_queue.put((frame_index, targets))
+
+            except Exception as e:
+                print(f"[Server] Client processing exception: {e}")
+            finally:
+                conn.close()
+                print("[Server] Client connection closed.")
+
     except Exception as e:
-        print(f"[Server] Exception: {e}")
+        print(f"[Server] Server exception: {e}")
     finally:
-        conn.close()
         server_sock.close()
-        print("[Server] Server closed.")
+        print("[Server] Server socket closed.")
+
 
 def server_thread():
     """服务器线程入口函数"""
@@ -97,7 +107,7 @@ class TargetDisplayWidget(QtWidgets.QWidget):
         self.scale = 100  # 1米 = 100像素，可调
         self.x_range = (-5, 5)  # x轴显示范围：-5m ~ 5m
         self.y_range = (0, 7)   # y轴显示范围：0 ~ 7m
-        self.__actionIndex = ['empty', '正常', '行走', '坐', '跌倒', '跌倒', '出边界']
+        self.__actionIndex = ['empty', '正常', '行走', '坐', '坠床', '真坠床', '出边界']
 
     def update_targets(self, targets):
         self.targets = targets
@@ -143,6 +153,7 @@ class TargetDisplayWidget(QtWidgets.QWidget):
                 painter.drawText(int(origin_x + 8), int(y_pos + 5), f"{m}m")
 
         # 绘制目标
+        # 绘制目标
         if self.targets:
             for target in self.targets:
                 x = target['posX']
@@ -159,13 +170,19 @@ class TargetDisplayWidget(QtWidgets.QWidget):
                 painter.setPen(QtCore.Qt.black)
                 text1 = f"x:{x:.2f}, y:{y:.2f}, z:{target['posZ']:.2f}"
 
-                # 状态映射
                 state_index = target.get('state', 0)
                 state_text = self.__actionIndex[state_index] if 0 <= state_index < len(self.__actionIndex) else "未知"
                 text2 = f"状态: {state_text}"
 
+                vx = target.get('velX', 0.0)
+                vy = target.get('velY', 0.0)
+                vz = target.get('velZ', 0.0)
+                text3 = f"vx:{vx:.2f}, vy:{vy:.2f}, vz:{vz:.2f}"
+
                 painter.drawText(int(draw_x + 10), int(draw_y), text1)
                 painter.drawText(int(draw_x + 10), int(draw_y + 15), text2)
+                painter.drawText(int(draw_x + 10), int(draw_y + 30), text3)
+
         else:
             painter.setPen(QtCore.Qt.darkGray)
             painter.drawText(width / 2 - 50, height / 2, "暂无目标")
@@ -190,6 +207,7 @@ class MainWindow(QtWidgets.QMainWindow):
         while not data_queue.empty():
             try:
                 frame_index, targets = data_queue.get_nowait()
+                # print(targets)
                 self.frame_index = frame_index  # 保存帧序号
                 self.setWindowTitle(f"Target Display - Frame #{self.frame_index}")  # 更新标题
                 self.display_widget.update_targets(targets)
