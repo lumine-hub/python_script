@@ -3,7 +3,6 @@ import socket
 import struct
 import time
 
-
 def main(serial_port, tcp_ip, tcp_port, max_retries=5, retry_delay=5):
     # 初始化串口
     ser = serial.Serial(
