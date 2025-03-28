@@ -82,6 +82,7 @@ class RadarRecorderGUI(QMainWindow):
         super().__init__()
         self.recording_thread = None
         self.initUI()
+        self.record_count = 1
         self.setup_styles()
 
     def initUI(self):
@@ -192,7 +193,7 @@ class RadarRecorderGUI(QMainWindow):
         millis = int((timestamp - int(timestamp)) * 1000)
         username = self.username_input.text().strip().replace(' ', '_')
         action = self.action_input.text().strip().replace(' ', '_')
-        return f'./fall_bed_data/pointCloud_{time_str}.{millis:03d}_{username}_{action}.csv'
+        return f'./fall_bed_data/pointCloud_{time_str}.{millis:03d}_{username}_{action}_count{self.record_count}.csv'
 
     def start_recording(self):
         if not self.validate_inputs():
@@ -211,8 +212,12 @@ class RadarRecorderGUI(QMainWindow):
 
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
-        self.status_label.setText('Recording...')
+        # 更新状态栏，显示当前计数
+        self.status_label.setText(f'Recording... (Count: {self.record_count})')
         self.recording_thread.start()
+        # 递增计数
+        self.record_count += 1
+
 
     def stop_recording(self):
         if self.recording_thread and self.recording_thread.isRunning():
@@ -222,7 +227,7 @@ class RadarRecorderGUI(QMainWindow):
     def recording_finished(self):
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
-        self.status_label.setText('Recording Stopped - Data Saved')
+        self.status_label.setText(f'Recording Stopped - Data Saved (Total: {self.record_count - 1})')
 
     def update_status(self, message):
         self.status_label.setText(message)
