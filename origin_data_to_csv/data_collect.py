@@ -82,7 +82,7 @@ class RadarRecorderGUI(QMainWindow):
         super().__init__()
         self.recording_thread = None
         self.initUI()
-        self.record_count = 48
+        self.record_count = 1
         self.setup_styles()
 
     def initUI(self):
