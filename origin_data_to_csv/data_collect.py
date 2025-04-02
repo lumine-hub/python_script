@@ -82,7 +82,7 @@ class RadarRecorderGUI(QMainWindow):
         super().__init__()
         self.recording_thread = None
         self.initUI()
-        self.record_count = 1
+        self.record_count = 48
         self.setup_styles()
 
     def initUI(self):
@@ -193,7 +193,7 @@ class RadarRecorderGUI(QMainWindow):
         millis = int((timestamp - int(timestamp)) * 1000)
         username = self.username_input.text().strip().replace(' ', '_')
         action = self.action_input.text().strip().replace(' ', '_')
-        return f'./fall_bed_data/pointCloud_{time_str}.{millis:03d}_{username}_{action}_count{self.record_count}.csv'
+        return f'./fall_bed_data3/pointCloud_{time_str}.{millis:03d}_{username}_{action}_count{self.record_count}.csv'
 
     def start_recording(self):
         if not self.validate_inputs():
